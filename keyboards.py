@@ -76,3 +76,29 @@ def create_about_keyboard() -> types.InlineKeyboardMarkup:
     )
     return keyboard
 
+
+def create_currency_keyboard(language: str) -> types.InlineKeyboardMarkup:
+    """Create currency selection keyboard."""
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton("💵 USD", callback_data="currency_USD"),
+        types.InlineKeyboardButton("💶 EUR", callback_data="currency_EUR"),
+        types.InlineKeyboardButton("💴 CNY", callback_data="currency_CNY"),
+        types.InlineKeyboardButton("💷 GBP", callback_data="currency_GBP"),
+        types.InlineKeyboardButton("₽ RUB", callback_data="currency_RUB"),
+        types.InlineKeyboardButton("₸ UZS", callback_data="currency_UZS")
+    )
+    return keyboard
+
+
+def create_report_keyboard(language: str) -> types.InlineKeyboardMarkup:
+    """Create report period selection keyboard."""
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton(get_translation(language, "report_today"), callback_data="report_today"),
+        types.InlineKeyboardButton(get_translation(language, "report_week"), callback_data="report_week"),
+        types.InlineKeyboardButton(get_translation(language, "report_month"), callback_data="report_month"),
+        types.InlineKeyboardButton(get_translation(language, "report_custom"), callback_data="report_custom")
+    )
+    return keyboard
+

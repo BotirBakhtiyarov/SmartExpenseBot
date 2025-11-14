@@ -9,9 +9,9 @@ import os
 import subprocess
 import logging
 from database import Database
-from ai_functions import deepseek_ai_expense
+from ai_functions import deepseek_ai_expense, deepseek_ai_expense_multiple
 from translations import get_translation
-from keyboards import create_back_keyboard, create_confirm_keyboard
+from keyboards import create_back_keyboard, create_confirm_keyboard, create_currency_keyboard, create_main_keyboard
 from voice_transcriber import VoiceTranscriber
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class ExpenseHandler:
     def __init__(self, bot: telebot.TeleBot, db: Database):
         self.bot = bot
         self.db = db
-        self.pending_expenses = {}  # {user_id: expense_data}
+        self.pending_expenses = {}  # {user_id: list of expense_data} - can be multiple expenses
         self.active_expense_mode = set()  # {user_id} - users in expense mode
         self.transcriber = VoiceTranscriber()
     
@@ -31,6 +31,18 @@ class ExpenseHandler:
         """Handle /expenses command or button - enter expense mode."""
         user = self.db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
         language = user.language or "en"
+        
+        # Check if user has currency set (first time expense user)
+        # Check if user has any expenses - if not, ask for currency
+        user_expenses = self.db.get_expenses(message.from_user.id, limit=1)
+        if len(user_expenses) == 0:
+            # First time using expense function - ask for currency selection
+            self.bot.reply_to(
+                message,
+                get_translation(language, "select_currency"),
+                reply_markup=create_currency_keyboard(language)
+            )
+            return
         
         # Enter expense mode
         self.active_expense_mode.add(message.from_user.id)
@@ -46,9 +58,10 @@ class ExpenseHandler:
         return user_id in self.active_expense_mode
     
     def handle_expense_message(self, message: telebot.types.Message):
-        """Handle expense text message."""
+        """Handle expense text message - supports multiple expenses."""
         user = self.db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
         language = user.language or "en"
+        default_currency = user.currency or "USD"
         
         text = message.text.strip()
         
@@ -56,22 +69,38 @@ class ExpenseHandler:
         processing_msg = self.bot.reply_to(message, get_translation(language, "processing"))
         
         try:
-            # Categorize expense using AI (DeepSeek_AI_1)
-            expense_data = deepseek_ai_expense(text, language)
+            # Extract multiple expenses using AI
+            expenses = deepseek_ai_expense_multiple(text, language, default_currency)
             
-            # Store pending expense
-            self.pending_expenses[message.from_user.id] = expense_data
+            if not expenses or len(expenses) == 0:
+                self.bot.edit_message_text(
+                    get_translation(language, "error"),
+                    chat_id=message.chat.id,
+                    message_id=processing_msg.message_id
+                )
+                return
             
-            # Ask for confirmation with currency
-            currency = expense_data.get("currency", "USD")
-            confirm_text = get_translation(
-                language,
-                "expense_confirm",
-                amount=expense_data["amount"],
-                currency=currency,
-                description=expense_data["description"],
-                category=expense_data["category"]
-            )
+            # Store pending expenses (list)
+            self.pending_expenses[message.from_user.id] = expenses
+            
+            # Build confirmation message for all expenses
+            if len(expenses) == 1:
+                # Single expense
+                exp = expenses[0]
+                confirm_text = get_translation(
+                    language,
+                    "expense_confirm",
+                    amount=exp["amount"],
+                    currency=exp["currency"],
+                    description=exp["description"],
+                    category=exp["category"]
+                )
+            else:
+                # Multiple expenses
+                confirm_text = get_translation(language, "multiple_expenses_found", count=len(expenses)) + "\n\n"
+                for i, exp in enumerate(expenses, 1):
+                    confirm_text += f"{i}. {exp['amount']} {exp['currency']} - {exp['description']} ({exp['category']})\n"
+                confirm_text += f"\n{get_translation(language, 'yes')} {get_translation(language, 'save_all')}, {get_translation(language, 'no')} to cancel"
             
             # Edit message with confirmation
             self.bot.edit_message_text(
@@ -89,9 +118,10 @@ class ExpenseHandler:
             )
     
     def handle_expense_voice(self, message: telebot.types.Message):
-        """Handle expense voice message."""
+        """Handle expense voice message - supports multiple expenses."""
         user = self.db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
         language = user.language or "en"
+        default_currency = user.currency or "USD"
         
         # Download voice file
         file_info = self.bot.get_file(message.voice.file_id)
@@ -117,22 +147,38 @@ class ExpenseHandler:
                 )
                 return
             
-            # Categorize expense using AI
-            expense_data = deepseek_ai_expense(transcribed_text, language)
+            # Extract multiple expenses using AI
+            expenses = deepseek_ai_expense_multiple(transcribed_text, language, default_currency)
             
-            # Store pending expense
-            self.pending_expenses[message.from_user.id] = expense_data
+            if not expenses or len(expenses) == 0:
+                self.bot.edit_message_text(
+                    get_translation(language, "error"),
+                    chat_id=message.chat.id,
+                    message_id=processing_msg.message_id
+                )
+                return
             
-            # Ask for confirmation with currency
-            currency = expense_data.get("currency", "USD")
-            confirm_text = get_translation(
-                language,
-                "expense_confirm",
-                amount=expense_data["amount"],
-                currency=currency,
-                description=expense_data["description"],
-                category=expense_data["category"]
-            )
+            # Store pending expenses (list)
+            self.pending_expenses[message.from_user.id] = expenses
+            
+            # Build confirmation message for all expenses
+            if len(expenses) == 1:
+                # Single expense
+                exp = expenses[0]
+                confirm_text = get_translation(
+                    language,
+                    "expense_confirm",
+                    amount=exp["amount"],
+                    currency=exp["currency"],
+                    description=exp["description"],
+                    category=exp["category"]
+                )
+            else:
+                # Multiple expenses
+                confirm_text = get_translation(language, "multiple_expenses_found", count=len(expenses)) + "\n\n"
+                for i, exp in enumerate(expenses, 1):
+                    confirm_text += f"{i}. {exp['amount']} {exp['currency']} - {exp['description']} ({exp['category']})\n"
+                confirm_text += f"\n{get_translation(language, 'yes')} {get_translation(language, 'save_all')}, {get_translation(language, 'no')} to cancel"
             
             # Edit message with confirmation
             self.bot.edit_message_text(
@@ -156,7 +202,7 @@ class ExpenseHandler:
                 os.remove(temp_path)
     
     def handle_expense_confirmation(self, call: telebot.types.CallbackQuery, confirmed: bool):
-        """Handle expense confirmation (yes/no)."""
+        """Handle expense confirmation (yes/no) - supports multiple expenses."""
         user = self.db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
         language = user.language or "en"
         
@@ -167,20 +213,31 @@ class ExpenseHandler:
         self.bot.answer_callback_query(call.id)
         
         if confirmed:
-            expense_data = self.pending_expenses[call.from_user.id]
+            expenses_list = self.pending_expenses[call.from_user.id]
             
-            # Save to database
-            self.db.add_expense(
-                call.from_user.id,
-                expense_data["amount"],
-                expense_data["category"],
-                expense_data["description"]
-            )
+            # Ensure it's a list
+            if not isinstance(expenses_list, list):
+                expenses_list = [expenses_list]
+            
+            # Save all expenses to database
+            saved_count = 0
+            for expense_data in expenses_list:
+                try:
+                    self.db.add_expense(
+                        call.from_user.id,
+                        expense_data["amount"],
+                        expense_data["category"],
+                        expense_data["description"]
+                    )
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"Error saving expense: {e}")
             
             # Send confirmation
-            response = get_translation(language, "expense_confirmed")
-            if expense_data.get("advice"):
-                response += f"\n\n{expense_data['advice']}"
+            if saved_count == 1:
+                response = get_translation(language, "expense_confirmed")
+            else:
+                response = f"{saved_count} {get_translation(language, 'expense_confirmed')}"
             
             self.bot.edit_message_text(
                 response,
@@ -188,8 +245,17 @@ class ExpenseHandler:
                 message_id=call.message.message_id
             )
             
-            # Remove pending expense
+            # Remove pending expenses and exit expense mode
             del self.pending_expenses[call.from_user.id]
+            self.active_expense_mode.discard(call.from_user.id)
+            
+            # Auto-return to main menu
+            from keyboards import create_main_keyboard
+            self.bot.send_message(
+                call.message.chat.id,
+                get_translation(language, "main_menu"),
+                reply_markup=create_main_keyboard(language)
+            )
         else:
             # User rejected
             del self.pending_expenses[call.from_user.id]

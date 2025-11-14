@@ -23,6 +23,7 @@ class User(Base):
     name = Column(String(255), nullable=False)
     language = Column(String(10), default='en')
     timezone = Column(String(50), default='UTC')  # Timezone string like 'Asia/Tashkent', 'Europe/Moscow', 'UTC'
+    currency = Column(String(10), default='USD')  # Default currency preference
     created_at = Column(DateTime, default=datetime.utcnow)
     
     expenses = relationship("Expense", back_populates="user", cascade="all, delete-orphan")
@@ -149,6 +150,20 @@ class Database:
             user = session.query(User).filter_by(telegram_id=telegram_id).first()
             if user:
                 user.timezone = timezone
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    
+    def update_user_currency(self, telegram_id: int, currency: str):
+        """Update user's currency preference. Thread-safe."""
+        session = self.session
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                user.currency = currency
                 session.commit()
         except Exception:
             session.rollback()

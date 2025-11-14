@@ -329,6 +329,150 @@ If time is not found, return None."""
         return None
 
 
+def deepseek_ai_expense_multiple(text: str, lang: str = "en", default_currency: str = "USD") -> list:
+    """
+    DeepSeek_AI_1: Extract multiple expenses from a single message.
+    
+    Args:
+        text: User's expense description (may contain multiple expenses)
+        lang: User's language preference
+        default_currency: Default currency if not specified
+    
+    Returns:
+        List of expense dictionaries
+    """
+    prompts = {
+        "uz": f"""Quyidagi matndan BARCHA xarajatlarni ajratib oling va JSON array formatida javob bering:
+[
+    {{
+        "amount": <raqam>,
+        "currency": "<valyuta>",
+        "category": "<kategoriya>",
+        "description": "<tavsif>"
+    }},
+    ...
+]
+
+MUHIM: Agar bir nechta xarajat bo'lsa, ularni alohida ajratib oling. Valyutani har bir xarajat uchun alohida aniqlang.
+
+Kategoriyalar: Food, Transport, Entertainment, Education, Health, Electronics, Shopping, Bills, Other
+Matn: {text}""",
+        "ru": f"""Извлеките ВСЕ расходы из следующего текста и верните JSON массив:
+[
+    {{
+        "amount": <число>,
+        "currency": "<валюта>",
+        "category": "<категория>",
+        "description": "<описание>"
+    }},
+    ...
+]
+
+ВАЖНО: Если есть несколько расходов, разделите их отдельно. Определите валюту для каждого расхода отдельно.
+
+Категории: Food, Transport, Entertainment, Education, Health, Electronics, Shopping, Bills, Other
+Текст: {text}""",
+        "en": f"""Extract ALL expenses from the following text and return a JSON array:
+[
+    {{
+        "amount": <number>,
+        "currency": "<currency>",
+        "category": "<category>",
+        "description": "<description>"
+    }},
+    ...
+]
+
+IMPORTANT: If there are multiple expenses, separate them individually. Detect currency for each expense separately.
+
+Categories: Food, Transport, Entertainment, Education, Health, Electronics, Shopping, Bills, Other
+Text: {text}"""
+    }
+    
+    prompt = prompts.get(lang, prompts["en"])
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {Config.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": f"You are DeepSeek_AI_1 - specialized for expense extraction. Extract ALL expenses from the user's message. If there are multiple expenses, return a JSON array with each expense as a separate object. Each expense must have: amount, currency (detect from text or use {default_currency}), category, and description. Return ONLY valid JSON array."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3
+        }
+        
+        response = requests.post(
+            Config.DEEPSEEK_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+            try:
+                # Remove markdown code blocks if present
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                result = json.loads(content)
+                
+                # Ensure result is a list
+                if not isinstance(result, list):
+                    result = [result]
+                
+                # Normalize expenses
+                expenses = []
+                for item in result:
+                    amount_value = item.get("amount", 0)
+                    try:
+                        amount = float(amount_value)
+                    except (ValueError, TypeError):
+                        amount = 0.0
+                    
+                    currency_raw = item.get("currency", default_currency).upper().strip()
+                    currency_map = {
+                        "YUAN": "CNY", "RMB": "CNY", "CN¥": "CNY", "¥": "CNY",
+                        "DOLLAR": "USD", "DOLLARS": "USD", "$": "USD", "US$": "USD",
+                        "EURO": "EUR", "EUROS": "EUR", "€": "EUR",
+                        "RUBLE": "RUB", "RUBLES": "RUB", "RUBL": "RUB", "₽": "RUB",
+                        "SOM": "UZS", "SO'M": "UZS", "UZS": "UZS"
+                    }
+                    currency = currency_map.get(currency_raw, currency_raw if len(currency_raw) <= 5 else default_currency)
+                    
+                    expenses.append({
+                        "amount": amount,
+                        "currency": currency,
+                        "category": item.get("category", "Other"),
+                        "description": item.get("description", "")
+                    })
+                
+                return expenses
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in multiple expense AI: {e}")
+                # Fallback: try single expense extraction
+                single = deepseek_ai_expense(text, lang)
+                return [single] if single.get("amount", 0) > 0 else []
+        else:
+            logger.error(f"DeepSeek API error in multiple expense AI: {response.status_code}")
+            single = deepseek_ai_expense(text, lang)
+            return [single] if single.get("amount", 0) > 0 else []
+    
+    except Exception as e:
+        logger.error(f"Error calling DeepSeek API for multiple expenses: {e}")
+        single = deepseek_ai_expense(text, lang)
+        return [single] if single.get("amount", 0) > 0 else []
+
+
 def _extract_expense_manually(text: str, lang: str) -> Dict:
     """Fallback manual extraction if API fails."""
     import re

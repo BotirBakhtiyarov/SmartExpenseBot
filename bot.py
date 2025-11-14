@@ -17,7 +17,7 @@ from handlers.report_handler import ReportHandler
 from handlers.reminder_handler import ReminderHandler
 from handlers.settings_handler import SettingsHandler
 from handlers.about_handler import AboutHandler
-from keyboards import create_main_keyboard, create_language_keyboard
+from keyboards import create_main_keyboard, create_language_keyboard, create_currency_keyboard, create_report_keyboard, create_back_keyboard
 from translations import get_translation, get_language_name
 
 # Configure logging first
@@ -73,38 +73,35 @@ def start_command(message: telebot.types.Message):
     user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
     language = user.language or "en"
     
-    # Request location if timezone is not set
-    if not user.timezone or user.timezone == 'UTC':
-        keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        keyboard.add(types.KeyboardButton(get_translation(language, "share_location"), request_location=True))
-        keyboard.add(types.KeyboardButton(get_translation(language, "skip")))
-        
-        if language == "en":  # First time user
-            bot.reply_to(
-                message,
-                get_translation("en", "welcome") + "\n\n" + get_translation("en", "request_location_for_timezone"),
-                reply_markup=keyboard
-            )
-        else:
-            bot.reply_to(
-                message,
-                get_translation(language, "request_location_for_timezone"),
-                reply_markup=keyboard
-            )
-        return
-    
-    if language == "en":  # First time user
+    # First time user - ask for language
+    if not user.language or user.language == "en" and user.timezone == "UTC":
         bot.reply_to(
             message,
             get_translation("en", "welcome"),
             reply_markup=create_language_keyboard()
         )
-    else:
+        return
+    
+    # If language is set but timezone is not, ask for location/country
+    if not user.timezone or user.timezone == 'UTC':
+        keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        keyboard.add(types.KeyboardButton(get_translation(language, "share_location"), request_location=True))
+        keyboard.add(types.KeyboardButton(get_translation(language, "enter_country")))
+        keyboard.add(types.KeyboardButton(get_translation(language, "skip")))
+        
         bot.reply_to(
             message,
-            get_translation(language, "main_menu"),
-            reply_markup=create_main_keyboard(language)
+            get_translation(language, "request_location_for_timezone"),
+            reply_markup=keyboard
         )
+        return
+    
+    # User is set up - show main menu
+    bot.reply_to(
+        message,
+        get_translation(language, "main_menu"),
+        reply_markup=create_main_keyboard(language)
+    )
 
 
 # Language selection callback
@@ -121,10 +118,11 @@ def language_callback(call: telebot.types.CallbackQuery):
     
     bot.answer_callback_query(call.id)
     
-    # Request location if timezone is not set
+    # Request location/country if timezone is not set
     if not user.timezone or user.timezone == 'UTC':
         keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
         keyboard.add(types.KeyboardButton(get_translation(language, "share_location"), request_location=True))
+        keyboard.add(types.KeyboardButton(get_translation(language, "enter_country")))
         keyboard.add(types.KeyboardButton(get_translation(language, "skip")))
         
         bot.send_message(
@@ -133,6 +131,8 @@ def language_callback(call: telebot.types.CallbackQuery):
             reply_markup=keyboard
         )
         return
+    
+    # Timezone is set - show main menu
     bot.send_message(
         call.message.chat.id,
         get_translation(language_code, "language_set"),
@@ -160,7 +160,7 @@ def expenses_button(message: telebot.types.Message):
 def reports_button(message: telebot.types.Message):
     """Handle reports button."""
     report_handler.handle_report_command(message)
-    user_states[message.from_user.id] = "report"
+    # Report mode removed - now uses buttons only
 
 
 @bot.message_handler(func=lambda message: message.text and (
@@ -249,6 +249,97 @@ def about_feedback_callback(call: telebot.types.CallbackQuery):
     about_handler.handle_feedback_callback(call)
 
 
+# Currency selection callback
+@bot.callback_query_handler(func=lambda call: call.data.startswith("currency_"))
+def currency_callback(call: telebot.types.CallbackQuery):
+    """Handle currency selection."""
+    currency_code = call.data.split("_")[1]
+    db.update_user_currency(call.from_user.id, currency_code)
+    
+    user = db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
+    language = user.language or "en"
+    
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        get_translation(language, "currency_set", currency=currency_code),
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id
+    )
+    
+    # Enter expense mode after currency selection
+    expense_handler.active_expense_mode.add(call.from_user.id)
+    bot.send_message(
+        call.message.chat.id,
+        get_translation(language, "expense_prompt"),
+        reply_markup=create_back_keyboard(language)
+    )
+
+
+# Report period selection callbacks
+@bot.callback_query_handler(func=lambda call: call.data.startswith("report_"))
+def report_period_callback(call: telebot.types.CallbackQuery):
+    """Handle report period selection."""
+    from datetime import datetime, timedelta
+    
+    user = db.get_or_create_user(call.from_user.id, call.from_user.first_name or "User")
+    language = user.language or "en"
+    
+    bot.answer_callback_query(call.id)
+    
+    period = call.data.split("_")[1]  # today, week, month, custom
+    now = datetime.utcnow()
+    start_date = None
+    end_date = now
+    
+    if period == "today":
+        start_date = datetime(now.year, now.month, now.day)
+    elif period == "week":
+        start_date = now - timedelta(days=7)
+    elif period == "month":
+        start_date = datetime(now.year, now.month, 1)
+    elif period == "custom":
+        # For custom, we'll ask user to input dates (simplified - can be enhanced)
+        bot.edit_message_text(
+            "Custom date selection coming soon. Please use Today/Week/Month for now.",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+        bot.send_message(
+            call.message.chat.id,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
+        )
+        return
+    
+    # Show processing
+    processing_msg = bot.send_message(call.message.chat.id, get_translation(language, "processing"))
+    
+    try:
+        # Generate report
+        report = report_handler.generate_report(call.from_user.id, start_date=start_date, end_date=end_date, language=language)
+        
+        # Edit message with report
+        bot.edit_message_text(
+            report,
+            chat_id=call.message.chat.id,
+            message_id=processing_msg.message_id
+        )
+        
+        # Auto-return to main menu
+        bot.send_message(
+            call.message.chat.id,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
+        )
+    except Exception as e:
+        logger.error(f"Error generating report: {e}")
+        bot.edit_message_text(
+            get_translation(language, "error"),
+            chat_id=call.message.chat.id,
+            message_id=processing_msg.message_id
+        )
+
+
 # Text message handlers
 @bot.message_handler(content_types=['text'])
 def text_message_handler(message: telebot.types.Message):
@@ -290,25 +381,56 @@ def text_message_handler(message: telebot.types.Message):
         get_translation("uz", "skip")
     ]
     if message.text in skip_texts:
-        # User skipped timezone - continue with default flow
+        # User skipped timezone - show main menu
         user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
         language = user.language or "en"
-        
-        if language == "en":
-            # Show language selection
-            bot.reply_to(
-                message,
-                get_translation("en", "welcome"),
-                reply_markup=create_language_keyboard()
-            )
-        else:
-            # Show main menu
-            bot.reply_to(
-                message,
-                get_translation(language, "main_menu"),
-                reply_markup=create_main_keyboard(language)
-            )
+        bot.reply_to(
+            message,
+            get_translation(language, "main_menu"),
+            reply_markup=create_main_keyboard(language)
+        )
         return
+    
+    # Check if user is entering country name (check if timezone is not set and not in any mode)
+    user = db.get_or_create_user(message.from_user.id, message.from_user.first_name or "User")
+    language = user.language or "en"
+    
+    if (not user.timezone or user.timezone == 'UTC') and user_states.get(message.from_user.id, "none") == "none":
+        # Check if it's not a command or button
+        enter_country_texts = [
+            get_translation("en", "enter_country"),
+            get_translation("ru", "enter_country"),
+            get_translation("uz", "enter_country")
+        ]
+        if message.text in enter_country_texts:
+            # User clicked "Enter Country" button - just acknowledge
+            bot.reply_to(
+                message,
+                get_translation(language, "request_location_for_timezone")
+            )
+            return
+        
+        if message.text not in back_texts:
+            # Try to detect timezone from country name
+            from handlers.reminder_handler import get_timezone_from_country
+            tz_name = get_timezone_from_country(message.text)
+            if tz_name:
+                try:
+                    db.update_user_timezone(message.from_user.id, tz_name)
+                    bot.reply_to(
+                        message,
+                        get_translation(language, "timezone_updated", timezone=tz_name),
+                        reply_markup=create_main_keyboard(language)
+                    )
+                    return
+                except Exception as e:
+                    logger.error(f"Error updating timezone from country: {e}")
+            else:
+                bot.reply_to(
+                    message,
+                    get_translation(language, "timezone_detection_failed") + "\n" + get_translation(language, "request_location_for_timezone")
+                )
+                return
     
     # Check if user has pending expense (waiting for confirmation)
     if message.from_user.id in expense_handler.pending_expenses:
@@ -319,13 +441,9 @@ def text_message_handler(message: telebot.types.Message):
     
     if state == "expense" or expense_handler.is_in_expense_mode(message.from_user.id):
         expense_handler.handle_expense_message(message)
-    elif state == "report" or report_handler.is_in_report_mode(message.from_user.id):
-        report_handler.handle_report_message(message)
     elif state == "reminder" or reminder_handler.is_in_reminder_mode(message.from_user.id):
         reminder_handler.handle_reminder_message(message)
-    else:
-        # Default: handle as general chat (reports)
-        report_handler.handle_report_message(message)
+    # Report mode removed - now uses buttons only
 
 
 # Voice message handlers
@@ -371,16 +489,8 @@ def location_message_handler(message: telebot.types.Message):
                     get_translation(language, "timezone_updated", timezone=tz_name),
                     reply_markup=create_main_keyboard(language)
                 )
-            # Show appropriate response based on context
-            elif user.language == "en" or not user.language:
-                # First time user - show language selection
-                bot.reply_to(
-                    message,
-                    get_translation(language, "timezone_updated", timezone=tz_name) + "\n\n" + get_translation("en", "welcome"),
-                    reply_markup=create_language_keyboard()
-                )
             else:
-                # Returning user - show main menu
+                # First time setup - show main menu
                 bot.reply_to(
                     message,
                     get_translation(language, "timezone_updated", timezone=tz_name),

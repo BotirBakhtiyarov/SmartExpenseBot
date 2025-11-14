@@ -19,6 +19,37 @@ from voice_transcriber import VoiceTranscriber
 logger = logging.getLogger(__name__)
 
 
+def format_reminder_time(dt: datetime, language: str = "en") -> str:
+    """
+    Format reminder datetime with localized month names.
+    Format: "14-November 16:06" or "14-ноябрь 16:06" or "14-noyabr 16:06"
+    """
+    month_names = {
+        "uz": {
+            1: "yanvar", 2: "fevral", 3: "mart", 4: "aprel", 5: "may", 6: "iyun",
+            7: "iyul", 8: "avgust", 9: "sentabr", 10: "oktabr", 11: "noyabr", 12: "dekabr"
+        },
+        "ru": {
+            1: "январь", 2: "февраль", 3: "март", 4: "апрель", 5: "май", 6: "июнь",
+            7: "июль", 8: "август", 9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
+        },
+        "en": {
+            1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
+            7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"
+        }
+    }
+    
+    lang = language if language in month_names else "en"
+    months = month_names.get(lang, month_names["en"])
+    
+    day = dt.day
+    month = months.get(dt.month, str(dt.month))
+    hour = dt.hour
+    minute = dt.minute
+    
+    return f"{day}-{month} {hour:02d}:{minute:02d}"
+
+
 def get_timezone_from_location(latitude, longitude):
     """
     Get timezone from latitude and longitude coordinates.
@@ -57,6 +88,119 @@ def get_timezone_from_location(latitude, longitude):
         logger.warning(f"Timeout detecting timezone from API for coordinates ({latitude}, {longitude})")
     except Exception as e:
         logger.warning(f"Error detecting timezone from API: {e}")
+    
+    return None
+
+
+def get_timezone_from_country(country_name: str) -> str:
+    """
+    Get timezone from country name.
+    Returns timezone name string or None.
+    """
+    # Common country to timezone mappings
+    country_timezone_map = {
+        # Major countries
+        "usa": "America/New_York", "united states": "America/New_York", "us": "America/New_York",
+        "uk": "Europe/London", "united kingdom": "Europe/London", "britain": "Europe/London",
+        "china": "Asia/Shanghai", "chinese": "Asia/Shanghai",
+        "japan": "Asia/Tokyo", "japanese": "Asia/Tokyo",
+        "india": "Asia/Kolkata", "indian": "Asia/Kolkata",
+        "russia": "Europe/Moscow", "russian": "Europe/Moscow",
+        "germany": "Europe/Berlin", "german": "Europe/Berlin",
+        "france": "Europe/Paris", "french": "Europe/Paris",
+        "spain": "Europe/Madrid", "spanish": "Europe/Madrid",
+        "italy": "Europe/Rome", "italian": "Europe/Rome",
+        "brazil": "America/Sao_Paulo", "brazilian": "America/Sao_Paulo",
+        "canada": "America/Toronto", "canadian": "America/Toronto",
+        "australia": "Australia/Sydney", "australian": "Australia/Sydney",
+        "south korea": "Asia/Seoul", "korea": "Asia/Seoul", "korean": "Asia/Seoul",
+        "singapore": "Asia/Singapore", "singaporean": "Asia/Singapore",
+        "thailand": "Asia/Bangkok", "thai": "Asia/Bangkok",
+        "indonesia": "Asia/Jakarta", "indonesian": "Asia/Jakarta",
+        "philippines": "Asia/Manila", "filipino": "Asia/Manila",
+        "vietnam": "Asia/Ho_Chi_Minh", "vietnamese": "Asia/Ho_Chi_Minh",
+        "malaysia": "Asia/Kuala_Lumpur", "malaysian": "Asia/Kuala_Lumpur",
+        "turkey": "Europe/Istanbul", "turkish": "Europe/Istanbul",
+        "egypt": "Africa/Cairo", "egyptian": "Africa/Cairo",
+        "south africa": "Africa/Johannesburg", "south african": "Africa/Johannesburg",
+        "mexico": "America/Mexico_City", "mexican": "America/Mexico_City",
+        "argentina": "America/Argentina/Buenos_Aires", "argentinian": "America/Argentina/Buenos_Aires",
+        "chile": "America/Santiago", "chilean": "America/Santiago",
+        "uzbekistan": "Asia/Tashkent", "uzbek": "Asia/Tashkent", "uzbekistani": "Asia/Tashkent",
+        "kazakhstan": "Asia/Almaty", "kazakh": "Asia/Almaty",
+        "kyrgyzstan": "Asia/Bishkek", "kyrgyz": "Asia/Bishkek",
+        "tajikistan": "Asia/Dushanbe", "tajik": "Asia/Dushanbe",
+        "turkmenistan": "Asia/Ashgabat", "turkmen": "Asia/Ashgabat",
+        "afghanistan": "Asia/Kabul", "afghan": "Asia/Kabul",
+        "pakistan": "Asia/Karachi", "pakistani": "Asia/Karachi",
+        "bangladesh": "Asia/Dhaka", "bangladeshi": "Asia/Dhaka",
+        "iran": "Asia/Tehran", "iranian": "Asia/Tehran",
+        "iraq": "Asia/Baghdad", "iraqi": "Asia/Baghdad",
+        "saudi arabia": "Asia/Riyadh", "saudi": "Asia/Riyadh",
+        "uae": "Asia/Dubai", "united arab emirates": "Asia/Dubai",
+        "israel": "Asia/Jerusalem", "israeli": "Asia/Jerusalem",
+        "ukraine": "Europe/Kiev", "ukrainian": "Europe/Kiev",
+        "poland": "Europe/Warsaw", "polish": "Europe/Warsaw",
+        "netherlands": "Europe/Amsterdam", "dutch": "Europe/Amsterdam",
+        "belgium": "Europe/Brussels", "belgian": "Europe/Brussels",
+        "switzerland": "Europe/Zurich", "swiss": "Europe/Zurich",
+        "austria": "Europe/Vienna", "austrian": "Europe/Vienna",
+        "sweden": "Europe/Stockholm", "swedish": "Europe/Stockholm",
+        "norway": "Europe/Oslo", "norwegian": "Europe/Oslo",
+        "denmark": "Europe/Copenhagen", "danish": "Europe/Copenhagen",
+        "finland": "Europe/Helsinki", "finnish": "Europe/Helsinki",
+        "greece": "Europe/Athens", "greek": "Europe/Athens",
+        "portugal": "Europe/Lisbon", "portuguese": "Europe/Lisbon",
+        "new zealand": "Pacific/Auckland", "new zealand": "Pacific/Auckland",
+    }
+    
+    # Normalize country name
+    country_normalized = country_name.lower().strip()
+    
+    # Try direct match
+    if country_normalized in country_timezone_map:
+        tz_name = country_timezone_map[country_normalized]
+        logger.info(f"Detected timezone {tz_name} from country name: {country_name}")
+        return tz_name
+    
+    # Try partial match
+    for country_key, tz_name in country_timezone_map.items():
+        if country_key in country_normalized or country_normalized in country_key:
+            logger.info(f"Detected timezone {tz_name} from country name (partial match): {country_name}")
+            return tz_name
+    
+    # Try API lookup as fallback
+    try:
+        import requests
+        url = f"https://restcountries.com/v3.1/name/{country_name}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                # Get capital city and try to get timezone
+                capital = data[0].get('capital', [])
+                if capital:
+                    # Use a simple mapping for capital cities
+                    capital_tz_map = {
+                        "washington": "America/New_York",
+                        "london": "Europe/London",
+                        "beijing": "Asia/Shanghai",
+                        "tokyo": "Asia/Tokyo",
+                        "new delhi": "Asia/Kolkata",
+                        "moscow": "Europe/Moscow",
+                        "berlin": "Europe/Berlin",
+                        "paris": "Europe/Paris",
+                        "madrid": "Europe/Madrid",
+                        "rome": "Europe/Rome",
+                        "tashkent": "Asia/Tashkent",
+                    }
+                    capital_lower = capital[0].lower()
+                    if capital_lower in capital_tz_map:
+                        tz_name = capital_tz_map[capital_lower]
+                        logger.info(f"Detected timezone {tz_name} from country capital: {capital[0]}")
+                        return tz_name
+    except Exception as e:
+        logger.debug(f"Error looking up country via API: {e}")
     
     return None
 
@@ -206,7 +350,7 @@ class ReminderHandler:
             
             # Convert reminder time back to user's timezone for display
             remind_time_user_tz = pytz.UTC.localize(remind_time).astimezone(user_tz)
-            remind_time_str = remind_time_user_tz.strftime("%Y-%m-%d %H:%M:%S")
+            remind_time_str = format_reminder_time(remind_time_user_tz, language)
             
             # Confirm reminder added and return to main menu
             from keyboards import create_main_keyboard
@@ -321,7 +465,7 @@ class ReminderHandler:
             
             # Convert reminder time back to user's timezone for display
             remind_time_user_tz = pytz.UTC.localize(remind_time).astimezone(user_tz)
-            remind_time_str = remind_time_user_tz.strftime("%Y-%m-%d %H:%M:%S")
+            remind_time_str = format_reminder_time(remind_time_user_tz, language)
             
             # Confirm reminder added and return to main menu
             from keyboards import create_main_keyboard
